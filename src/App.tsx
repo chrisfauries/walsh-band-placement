@@ -180,7 +180,7 @@ export default function App() {
       <header className="mb-6 flex flex-col md:flex-row items-center justify-between gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-slate-900">Band Roster Matrix</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Band Placement</h1>
             <button 
               onClick={() => signOut(auth)} 
               className="text-xs text-slate-400 hover:text-slate-700 underline bg-slate-100 px-2 py-1 rounded"
