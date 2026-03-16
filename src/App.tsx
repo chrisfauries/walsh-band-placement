@@ -500,7 +500,8 @@ export default function App() {
       )}
 
       {/* Compact Header & Hamburger Menu */}
-      <header className="mb-4 flex flex-row items-center justify-between bg-white p-3 rounded-xl shadow-sm border border-slate-300 relative z-30">
+      <header className="mb-2 flex flex-row items-center justify-between bg-white p-1 rounded-xl shadow-sm border border-slate-300 relative z-30">
+        <div className='w-12'></div>
         <h1 className="text-lg font-bold text-slate-900">Band Placement</h1>
         
         <button 
@@ -859,7 +860,7 @@ function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDra
         <button 
           onClick={handleGradeClick}
           title="Click to change grade"
-          className="absolute -top-1.5 -right-1 sm:-right-1.5 bg-slate-800 hover:bg-slate-600 text-white text-[9px] sm:text-[10px] font-bold w-3 h-3 sm:w-4 sm:h-4 rounded-full flex items-center justify-center shadow-sm cursor-pointer transition-colors"
+          className="absolute -top-1.5 -right-1 sm:-right-1.5 bg-slate-400 hover:bg-slate-800 text-white text-[9px] sm:text-[10px] font-bold w-3 h-3 sm:w-4 sm:h-4 rounded-full flex items-center justify-center shadow-sm cursor-pointer transition-colors"
         >
           {student.grade}
         </button>
