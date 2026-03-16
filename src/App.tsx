@@ -21,6 +21,7 @@ interface Student {
   band: string;
   grade: GradeLevel;
   position?: number;
+  color?: string; // Optional personal color override
 }
 
 interface Band {
@@ -38,9 +39,74 @@ const DEFAULT_BANDS: Band[] = [
 ];
 
 const INSTRUMENTS = [
-  'Flute', 'Clarinet', 'Oboe', 'Bassoon','Saxophone', 
+  'Flute', 'Oboe', 'Bassoon','Clarinet', 'Saxophone', 
   'Trumpet', 'Horn', 'Trombone', 'Euphonium', 'Tuba', 'Percussion'
 ];
+
+// ==========================================
+// AUTO-SCROLL HOOK
+// ==========================================
+function useAutoScroll(isDragging: boolean) {
+  const mousePos = useRef({ x: 0, y: 0 });
+  const requestRef = useRef<number>();
+
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      mousePos.current = { x: e.clientX, y: e.clientY };
+    };
+
+    if (isDragging) {
+      window.addEventListener('dragover', handleDragOver);
+    } else {
+      window.removeEventListener('dragover', handleDragOver);
+    }
+
+    return () => window.removeEventListener('dragover', handleDragOver);
+  }, [isDragging]);
+
+  useEffect(() => {
+    if (!isDragging) {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      return;
+    }
+
+    const scroll = () => {
+      const { x, y } = mousePos.current;
+      const { innerWidth, innerHeight } = window;
+      const threshold = 100;
+      const maxSpeed = 20;
+
+      let scrollX = 0;
+      let scrollY = 0;
+
+      // Calculate horizontal scroll
+      if (x < threshold && x > 0) {
+        scrollX = -maxSpeed * (1 - x / threshold);
+      } else if (x > innerWidth - threshold && x < innerWidth) {
+        scrollX = maxSpeed * (1 - (innerWidth - x) / threshold);
+      }
+
+      // Calculate vertical scroll
+      if (y < threshold && y > 0) {
+        scrollY = -maxSpeed * (1 - y / threshold);
+      } else if (y > innerHeight - threshold && y < innerHeight) {
+        scrollY = maxSpeed * (1 - (innerHeight - y) / threshold);
+      }
+
+      if (scrollX !== 0 || scrollY !== 0) {
+        window.scrollBy(scrollX, scrollY);
+      }
+
+      requestRef.current = requestAnimationFrame(scroll);
+    };
+
+    requestRef.current = requestAnimationFrame(scroll);
+
+    return () => {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    };
+  }, [isDragging]);
+}
 
 // ==========================================
 // MAIN APP COMPONENT
@@ -58,9 +124,16 @@ export default function App() {
   const [draggedStudentId, setDraggedStudentId] = useState<string | null>(null);
   const [activeZone, setActiveZone] = useState<{band: string, instrument: string} | null>(null);
   
+  // --- Context Menu State ---
+  const [contextMenu, setContextMenu] = useState<{mouseX: number, mouseY: number, studentId: string, mode: 'menu' | 'picker'} | null>(null);
+  const [isMainMenuOpen, setIsMainMenuOpen] = useState(false);
+
   // --- Modal States ---
   const [csvErrors, setCsvErrors] = useState<string[] | null>(null);
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+
+  // Initialize auto-scroll behavior when a student is actively being dragged
+  useAutoScroll(!!draggedStudentId);
 
   // --- Listen to Authentication Status ---
   useEffect(() => {
@@ -168,15 +241,6 @@ export default function App() {
     setActiveZone(null);
   };
 
-  const handleDeleteDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setActiveZone(null);
-    const studentId = e.dataTransfer.getData('text/plain') || draggedStudentId;
-    if (!studentId) return;
-    await remove(ref(db, `students/${studentId}`));
-    setDraggedStudentId(null);
-  };
-
   const handleAddStudent = async (band: string, instrument: string) => {
     const cellStudents = students.filter(s => s.band === band && s.instrument === instrument);
     const maxPos = cellStudents.length > 0 ? Math.max(...cellStudents.map(s => s.position ?? 0)) : 0;
@@ -203,6 +267,31 @@ export default function App() {
 
   const handleColorChange = async (bandName: string, newColor: string) => {
     await update(ref(db, `bands/${bandName}`), { color: newColor });
+  };
+
+  // --- Context Menu Handlers ---
+  const handleContextMenu = (e: React.MouseEvent, studentId: string) => {
+    e.preventDefault();
+    setContextMenu({
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      studentId: studentId,
+      mode: 'menu'
+    });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu(null);
+  };
+
+  const handleDeleteStudent = async (studentId: string) => {
+    await remove(ref(db, `students/${studentId}`));
+    closeContextMenu();
+  };
+
+  const handleRemovePersonalColor = async (studentId: string) => {
+    await update(ref(db, `students/${studentId}`), { color: null });
+    closeContextMenu();
   };
 
   // --- Export CSV ---
@@ -279,9 +368,68 @@ export default function App() {
   if (loadingAuth) return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500">Loading...</div>;
   if (!user) return <AuthScreen />;
 
+  const contextMenuStudent = contextMenu ? students.find(s => s.id === contextMenu.studentId) : null;
+  const hasPersonalColor = !!contextMenuStudent?.color;
+
   return (
-    <div className="min-h-screen bg-slate-50 p-2 sm:p-4 font-sans text-slate-800 pb-12 flex flex-col">
+    <div className="min-h-screen bg-slate-50 p-2 sm:p-4 font-sans text-slate-800 pb-12 flex flex-col relative">
       
+      {/* Context Menu Overlay & Menu */}
+      {contextMenu && contextMenuStudent && (
+        <>
+          <div 
+            className="fixed inset-0 z-40" 
+            onClick={closeContextMenu} 
+            onContextMenu={(e) => { e.preventDefault(); closeContextMenu(); }} 
+          />
+          <div 
+            className="fixed z-50 bg-white rounded-lg shadow-xl border border-slate-200 py-1 min-w-[160px] flex flex-col overflow-hidden"
+            style={{ top: contextMenu.mouseY, left: contextMenu.mouseX }}
+          >
+            {contextMenu.mode === 'menu' ? (
+              <>
+                <button 
+                  className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 transition-colors"
+                  onClick={() => setContextMenu({ ...contextMenu, mode: 'picker' })}
+                >
+                  Set Personal Color
+                </button>
+                {hasPersonalColor && (
+                  <button 
+                    className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 transition-colors"
+                    onClick={() => handleRemovePersonalColor(contextMenu.studentId)}
+                  >
+                    Remove Personal Color
+                  </button>
+                )}
+                <button 
+                  className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                  onClick={() => handleDeleteStudent(contextMenu.studentId)}
+                >
+                  Delete Student
+                </button>
+              </>
+            ) : (
+              <div className="p-3 flex flex-col gap-2">
+                <span className="text-xs font-bold text-slate-500 uppercase">Pick Color</span>
+                <input 
+                  type="color" 
+                  value={contextMenuStudent.color || '#ffffff'}
+                  onChange={(e) => update(ref(db, `students/${contextMenu.studentId}`), { color: e.target.value })}
+                  className="w-full h-10 rounded cursor-pointer border border-slate-300"
+                />
+                <button 
+                  onClick={closeContextMenu}
+                  className="w-full bg-blue-600 text-white rounded py-1.5 mt-1 text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
       {/* Clear Board Warning Modal Overlay */}
       {isClearModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -351,49 +499,71 @@ export default function App() {
         </div>
       )}
 
-      {/* Header & Controls */}
-      <header className="mb-4 flex flex-col md:flex-row items-center justify-between gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-300">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-slate-900">Band Placement</h1>
-            <button 
-              onClick={() => signOut(auth)} 
-              className="text-xs text-slate-400 hover:text-slate-700 underline bg-slate-100 px-2 py-1 rounded"
-            >
-              Sign Out
-            </button>
-          </div>
-          <p className="text-sm text-slate-500 mt-1">Drag and drop students to organize your ensembles</p>
-        </div>
+      {/* Compact Header & Hamburger Menu */}
+      <header className="mb-4 flex flex-row items-center justify-between bg-white p-3 rounded-xl shadow-sm border border-slate-300 relative z-30">
+        <h1 className="text-lg font-bold text-slate-900">Band Placement</h1>
         
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex flex-wrap items-center gap-2 justify-end">
-            <button 
-              onClick={() => setIsClearModalOpen(true)}
-              className="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 border border-red-200 rounded-lg text-sm font-medium transition-colors shadow-sm"
-            >
-              Clear Board
-            </button>
-            <button 
-              onClick={handleExportCSV}
-              className="px-4 py-2 bg-white text-slate-700 hover:bg-slate-50 border border-slate-300 rounded-lg text-sm font-medium transition-colors shadow-sm"
-            >
-              Export CSV
-            </button>
-            <label className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm">
-              Import CSV
-              <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-            </label>
-          </div>
-          <span className="text-xs text-slate-400 text-right">
-            CSV Format: Name, Instrument, Band, Grade, Position (Optional)
-          </span>
-        </div>
+        <button 
+          onClick={() => setIsMainMenuOpen(!isMainMenuOpen)}
+          className="p-1.5 hover:bg-slate-100 rounded-md transition-colors text-slate-600"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+
+        {isMainMenuOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setIsMainMenuOpen(false)} />
+            <div className="absolute right-4 top-14 z-50 bg-white rounded-lg shadow-xl border border-slate-200 py-1 min-w-[160px] flex flex-col overflow-hidden">
+              <label className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer">
+                Import CSV
+                <input 
+                  type="file" 
+                  accept=".csv" 
+                  className="hidden" 
+                  onChange={(e) => {
+                    handleFileUpload(e);
+                    setIsMainMenuOpen(false);
+                  }} 
+                />
+              </label>
+              <button 
+                onClick={() => {
+                  handleExportCSV();
+                  setIsMainMenuOpen(false);
+                }} 
+                className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                Export CSV
+              </button>
+              <button 
+                onClick={() => {
+                  setIsClearModalOpen(true);
+                  setIsMainMenuOpen(false);
+                }} 
+                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+              >
+                Clear Board
+              </button>
+              <div className="border-t border-slate-200 my-1"></div>
+              <button 
+                onClick={() => {
+                  signOut(auth);
+                  setIsMainMenuOpen(false);
+                }} 
+                className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                Sign Out
+              </button>
+            </div>
+          </>
+        )}
       </header>
 
       {/* Grid Container */}
       <div 
-        className="w-full bg-white rounded-xl shadow-sm border border-slate-300 p-2 sm:p-4 mb-4 flex-1 flex flex-col"
+        className="w-full bg-white rounded-xl shadow-sm border border-slate-300 mb-4 flex-1 flex flex-col relative"
         onDragLeave={(e) => {
           const related = e.relatedTarget as Node | null;
           if (!e.currentTarget.contains(related)) {
@@ -401,117 +571,138 @@ export default function App() {
           }
         }}
       >
-        
-        {/* Header Row (Instruments) */}
-        <div className="flex w-full border-b-2 border-slate-800 pb-2 mb-2">
-          <div className="flex-1 w-0 min-w-[80px] shrink-0 font-bold text-slate-400 uppercase text-[10px] md:text-xs flex items-end px-1 sm:px-2">
-            Ensemble
-          </div>
-          {INSTRUMENTS.map(instrument => {
-            const isActiveInstrument = activeZone?.instrument === instrument;
-            return (
-              <div 
-                key={instrument} 
-                title={instrument} 
-                className={`flex-1 w-0 text-[9px] sm:text-xs md:text-sm px-0.5 text-center truncate transition-all duration-200 ${isActiveInstrument ? 'text-blue-600 font-extrabold scale-110' : 'text-slate-700 font-bold'}`}
-              >
-                {instrument}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Matrix Rows (Bands) */}
-        <div className="flex flex-col flex-1 w-full">
-          {bands.map((band) => (
-            <div key={band.name} className="flex w-full border-b border-slate-300 last:border-0 hover:bg-slate-50 transition-colors">
-              
-              {/* Row Header */}
-              <div className="flex-1 w-0 min-w-[80px] shrink-0 py-2 sm:py-4 pr-1 sm:pr-2 flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-2 border-r border-slate-300 px-1 sm:px-2">
-                <div className="relative group/picker cursor-pointer w-4 h-4 sm:w-6 sm:h-6 rounded overflow-hidden shadow-sm border border-black/20 shrink-0">
-                  <input 
-                    type="color" 
-                    value={band.color} 
-                    onChange={(e) => handleColorChange(band.name, e.target.value)}
-                    className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer"
-                    title="Change Band Color"
-                  />
-                </div>
-                <span 
-                  className={`text-[10px] sm:text-xs md:text-sm truncate w-full transition-colors duration-200 ${activeZone?.band === band.name ? 'text-blue-600 font-extrabold' : 'text-slate-800 font-semibold'}`} 
-                  title={band.name}
-                >
-                  {band.name}
-                </span>
-              </div>
-
-              {/* Drop Zones (Cells) */}
-              {INSTRUMENTS.map((instrument) => {
-                const cellStudents = students
-                  .filter(s => s.band === band.name && s.instrument === instrument)
-                  .sort((a, b) => {
-                    const posA = a.position ?? 0;
-                    const posB = b.position ?? 0;
-                    return posA !== posB ? posA - posB : a.id.localeCompare(b.id);
-                  });
-
-                const isCellActive = activeZone?.band === band.name && activeZone?.instrument === instrument;
-
-                return (
-                  <div
-                    key={`${band.name}-${instrument}`}
-                    className={`group/cell flex-1 w-0 min-h-[60px] border-r border-slate-300 last:border-r-0 flex flex-col relative pt-1 pb-6 px-0.5 sm:px-2 transition-all duration-200 ${isCellActive ? 'bg-blue-50 ring-2 ring-blue-400 ring-inset' : ''}`}
-                    onDragOver={(e) => {
-                      handleDragOver(e);
-                      if (activeZone?.band !== band.name || activeZone?.instrument !== instrument) {
-                        setActiveZone({ band: band.name, instrument });
-                      }
-                    }}
-                    onDrop={(e) => handleCellDrop(e, band.name, instrument)}
-                  >
-
-                    {cellStudents.map((student, index) => (
-                      <StudentCard 
-                        key={student.id} 
-                        student={student} 
-                        color={band.color}
-                        prevPos={index > 0 ? cellStudents[index - 1].position ?? 0 : null}
-                        nextPos={index < cellStudents.length - 1 ? cellStudents[index + 1].position ?? 0 : null}
-                        draggedStudentId={draggedStudentId}
-                        onDragStart={handleDragStart} 
-                        onDragEnd={handleDragEnd}
-                        onReorder={(noteId, newPos) => handleReorder(noteId, band.name, instrument, newPos)}
-                        onEditName={handleNameEdit} 
-                        onCycleGrade={handleCycleGrade}
-                      />
-                    ))}
-
-                    <button
-                      onClick={() => handleAddStudent(band.name, instrument)}
-                      title="Add Student"
-                      className="absolute bottom-1 right-1 w-4 h-4 sm:w-5 sm:h-5 rounded-full border border-dashed border-slate-400 text-slate-400 hover:text-slate-700 hover:border-slate-500 hover:bg-slate-100 transition-all flex items-center justify-center text-sm sm:text-lg leading-none pb-0.5 opacity-0 group-hover/cell:opacity-100"
-                    >
-                      +
-                    </button>
-                  </div>
-                );
-              })}
+        <div className="min-w-max flex flex-col flex-1">
+          {/* Header Row (Instruments) */}
+          <div className="flex w-full border-b-2 border-slate-800 sticky top-0 z-20 bg-white shadow-sm">
+            <div className="w-10 min-w-[40px] max-w-[40px] shrink-0 sticky left-0 z-30 bg-white border-r border-slate-300">
+              {/* Empty intersection cell */}
             </div>
-          ))}
+            {INSTRUMENTS.map(instrument => {
+              const isActiveInstrument = activeZone?.instrument === instrument;
+              return (
+                <div 
+                  key={instrument} 
+                  title={instrument} 
+                  className={`flex-1 w-0 min-w-[160px] text-[9px] sm:text-xs md:text-sm px-0.5 py-3 text-center truncate transition-all duration-200 flex items-center justify-center ${isActiveInstrument ? 'text-blue-600 font-extrabold scale-110' : 'text-slate-700 font-bold'}`}
+                >
+                  {instrument}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Matrix Rows (Bands) */}
+          <div className="flex flex-col flex-1 w-full">
+            {bands.map((band) => {
+              const bandStudentsCount = students.filter(s => s.band === band.name).length;
+              
+              return (
+              <div key={band.name} className="group flex w-full border-b border-slate-300 last:border-0 hover:bg-slate-50 transition-colors">
+                
+                {/* Row Header (Vertical with adjacent color picker) */}
+                <div className="w-10 min-w-[40px] max-w-[40px] shrink-0 py-2 flex items-center justify-center border-r border-slate-300 sticky left-0 z-20 bg-white group-hover:bg-slate-50 transition-colors">
+                  <div className="flex flex-col-reverse items-center justify-center gap-1.5 h-full">
+                    <div className="relative group/picker cursor-pointer w-3 h-3 sm:w-3.5 sm:h-3.5 rounded overflow-hidden shadow-sm border border-black/20 shrink-0">
+                      <input 
+                        type="color" 
+                        value={band.color} 
+                        onChange={(e) => handleColorChange(band.name, e.target.value)}
+                        className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer"
+                        title="Change Band Color"
+                      />
+                    </div>
+                    <span 
+                      className={`text-[10px] sm:text-xs md:text-sm whitespace-nowrap transition-colors duration-200 [writing-mode:vertical-rl] rotate-180 ${activeZone?.band === band.name ? 'text-blue-600 font-extrabold' : 'text-slate-800 font-semibold'}`} 
+                      title={band.name}
+                    >
+                      {band.name} <span className="font-normal text-slate-500 ml-1">({bandStudentsCount})</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Drop Zones (Cells) */}
+                {INSTRUMENTS.map((instrument) => {
+                  const cellStudents = students
+                    .filter(s => s.band === band.name && s.instrument === instrument)
+                    .sort((a, b) => {
+                      const posA = a.position ?? 0;
+                      const posB = b.position ?? 0;
+                      return posA !== posB ? posA - posB : a.id.localeCompare(b.id);
+                    });
+
+                  const isCellActive = activeZone?.band === band.name && activeZone?.instrument === instrument;
+
+                  return (
+                    <div
+                      key={`${band.name}-${instrument}`}
+                      className={`group/cell flex-1 w-0 min-w-[160px] min-h-[60px] border-r border-slate-300 last:border-r-0 flex flex-col relative pt-1 pb-6 px-0.5 sm:px-2 transition-all duration-200 ${isCellActive ? 'bg-blue-50 ring-2 ring-blue-400 ring-inset' : ''}`}
+                      onDragOver={(e) => {
+                        handleDragOver(e);
+                        if (activeZone?.band !== band.name || activeZone?.instrument !== instrument) {
+                          setActiveZone({ band: band.name, instrument });
+                        }
+                      }}
+                      onDrop={(e) => handleCellDrop(e, band.name, instrument)}
+                    >
+
+                      {cellStudents.map((student, index) => (
+                        <StudentCard 
+                          key={student.id} 
+                          student={student} 
+                          color={student.color || band.color}
+                          prevPos={index > 0 ? cellStudents[index - 1].position ?? 0 : null}
+                          nextPos={index < cellStudents.length - 1 ? cellStudents[index + 1].position ?? 0 : null}
+                          draggedStudentId={draggedStudentId}
+                          onDragStart={handleDragStart} 
+                          onDragEnd={handleDragEnd}
+                          onReorder={(noteId, newPos) => handleReorder(noteId, band.name, instrument, newPos)}
+                          onEditName={handleNameEdit} 
+                          onCycleGrade={handleCycleGrade}
+                          onContextMenu={handleContextMenu}
+                        />
+                      ))}
+
+                      <button
+                        onClick={() => handleAddStudent(band.name, instrument)}
+                        title="Add Student"
+                        className="absolute bottom-1 right-1 w-4 h-4 sm:w-5 sm:h-5 rounded-full border border-dashed border-slate-400 text-slate-400 hover:text-slate-700 hover:border-slate-500 hover:bg-slate-100 transition-all flex items-center justify-center text-sm sm:text-lg leading-none pb-0.5 opacity-0 group-hover/cell:opacity-100"
+                      >
+                        +
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              );
+            })}
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {draggedStudentId && (
-        <div 
-          onDragEnter={() => setActiveZone(null)}
-          onDragOver={handleDragOver} 
-          onDrop={handleDeleteDrop}
-          className="w-full h-20 border-2 border-dashed border-red-300 bg-red-50 text-red-500 rounded-xl flex items-center justify-center font-bold text-lg shadow-inner transition-colors hover:bg-red-100 hover:border-red-400 flex-shrink-0"
-        >
-          🗑️ Drop Student Here to Delete
-        </div>
-      )}
-
+// ==========================================
+// DROP INDICATOR SUB-COMPONENT
+// ==========================================
+function DropIndicator({ onDrop }: { onDrop: (e: React.DragEvent) => void }) {
+  const [isOver, setIsOver] = useState(false);
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsOver(true);
+      }}
+      onDragLeave={() => setIsOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation(); // Prevent the cell drop handler from firing
+        setIsOver(false);
+        onDrop(e);
+      }}
+      className="w-full h-3 -my-1.5 z-10 relative flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity"
+    >
+      <div className={`w-full h-1 rounded-full transition-colors ${isOver ? 'bg-blue-500' : 'bg-transparent'}`} />
     </div>
   );
 }
@@ -576,9 +767,10 @@ interface StudentCardProps {
   onReorder: (id: string, newPos: number) => void;
   onEditName: (id: string, newName: string) => void;
   onCycleGrade: (id: string, currentGrade: GradeLevel) => void;
+  onContextMenu: (e: React.MouseEvent, id: string) => void;
 }
 
-function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDragStart, onDragEnd, onReorder, onEditName, onCycleGrade }: StudentCardProps) {
+function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDragStart, onDragEnd, onReorder, onEditName, onCycleGrade, onContextMenu }: StudentCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(student.name);
   const [dropIndicator, setDropIndicator] = useState<'top' | 'bottom' | null>(null);
@@ -613,7 +805,7 @@ function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDra
   const handleDragOver = (e: React.DragEvent) => {
     if (isEditing) return;
     e.preventDefault();
-    e.stopPropagation(); // VERY IMPORTANT: Stops the parent cell from grabbing it!
+    e.stopPropagation(); 
     
     // Calculate if we are hovering the top half or bottom half of the card
     const rect = e.currentTarget.getBoundingClientRect();
@@ -623,7 +815,7 @@ function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDra
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation(); // VERY IMPORTANT: Stops the parent cell from grabbing it!
+    e.stopPropagation(); 
     const side = dropIndicator;
     setDropIndicator(null);
 
@@ -646,16 +838,15 @@ function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDra
   };
 
   return (
-    // This wrapper handles the visual gap via py-1 so there are no dead spaces to hover!
     <div 
       className="relative py-1 w-full"
       onDragOver={handleDragOver}
       onDragLeave={() => setDropIndicator(null)}
       onDrop={handleDrop}
+      onContextMenu={(e) => onContextMenu(e, student.id)}
     >
-      {/* Drop Indicator Lines rendered perfectly inside the visual padding */}
-      {dropIndicator === 'top' && <div className="absolute top-0 left-0 right-0 h-1 bg-blue-600 rounded-full z-50 pointer-events-none" />}
-      {dropIndicator === 'bottom' && <div className="absolute bottom-0 left-0 right-0 h-1 bg-blue-600 rounded-full z-50 pointer-events-none" />}
+      {dropIndicator === 'top' && <div className="absolute top-0 left-0 right-0 h-1 bg-blue-600 rounded-full z-10 pointer-events-none" />}
+      {dropIndicator === 'bottom' && <div className="absolute bottom-0 left-0 right-0 h-1 bg-blue-600 rounded-full z-10 pointer-events-none" />}
 
       <div
         draggable={!isEditing}
@@ -668,7 +859,7 @@ function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDra
         <button 
           onClick={handleGradeClick}
           title="Click to change grade"
-          className="absolute -top-1.5 -left-1 sm:-left-1.5 bg-slate-800 hover:bg-slate-600 text-white text-[9px] sm:text-[10px] font-bold w-3 h-3 sm:w-4 sm:h-4 rounded-full flex items-center justify-center shadow-sm cursor-pointer transition-colors"
+          className="absolute -top-1.5 -right-1 sm:-right-1.5 bg-slate-800 hover:bg-slate-600 text-white text-[9px] sm:text-[10px] font-bold w-3 h-3 sm:w-4 sm:h-4 rounded-full flex items-center justify-center shadow-sm cursor-pointer transition-colors"
         >
           {student.grade}
         </button>
@@ -680,7 +871,7 @@ function StudentCard({ student, color, prevPos, nextPos, draggedStudentId, onDra
             className="w-full text-[10px] sm:text-xs font-medium bg-white/70 border border-black/20 rounded px-1 outline-none"
           />
         ) : (
-          <span className="text-[10px] sm:text-xs font-medium text-slate-800 truncate ml-1 sm:ml-2 leading-tight">{student.name}</span>
+          <span className="text-[10px] sm:text-xs font-medium text-slate-800 truncate leading-tight mr-3 sm:mr-4">{student.name}</span>
         )}
       </div>
     </div>
